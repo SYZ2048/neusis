@@ -36,13 +36,14 @@ def config_parser():
 
 
 class Runner:
-    def __init__(self, conf, is_continue=False, write_config=True):
+    def __init__(self, conf, is_continue=False, write_config=True, viewpoint_num=300):
         conf_path = conf
         f = open(conf_path)
         conf_text = f.read()
         self.is_continue = is_continue
         self.conf = ConfigFactory.parse_string(conf_text)
         self.write_config = write_config
+        self.viewpoint_num = viewpoint_num
 
     def set_params(self):
         self.expID = self.conf.get_string('conf.expID') 
@@ -84,7 +85,7 @@ class Runner:
         self.z_min = self.conf.get_float('mesh.z_min')
         self.level_set = self.conf.get_float('mesh.level_set')
 
-        self.data = load_data(dataset)
+        self.data = load_data(dataset, self.viewpoint_num)
 
         self.H, self.W = self.data[self.image_setkeyname][0].shape
 
@@ -368,10 +369,11 @@ if __name__=='__main__':
     parser.add_argument('--conf', type=str, default="./confs/conf.conf")
     parser.add_argument('--is_continue', default=False, action="store_true")
     parser.add_argument('--gpu', type=int, default=0)
+    parser.add_argument('--viewpoint_num', type=int, default=300)
 
     args = parser.parse_args()
 
     torch.cuda.set_device(args.gpu)
-    runner = Runner(args.conf, args.is_continue)
+    runner = Runner(args.conf, args.is_continue, args.viewpoint_num)
     runner.set_params()
     runner.train()
