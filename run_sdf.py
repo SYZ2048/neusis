@@ -16,12 +16,6 @@ import logging
 import argparse 
 
 
-def config_parser():
-    import configargparse
-    parser = configargparse.ArgumentParser()
-
-
-
 class Runner:
     def __init__(self, conf, is_continue=False, write_config=True):
         conf_path = conf
