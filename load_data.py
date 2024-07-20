@@ -7,7 +7,7 @@ from scipy.io import savemat
 import random
 
 
-def load_data(target, viewpoint_num=300, use_saved_selection=False):
+def load_data(target, viewpoint_num=598, use_saved_selection=True):
     dirpath = "./data/{}".format(target)
     pickle_loc = "{}/Data".format(dirpath)
     output_loc = "{}/UnzipData".format(dirpath)
