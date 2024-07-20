@@ -7,7 +7,7 @@ from scipy.io import savemat
 import random
 
 
-def load_data(target, viewpoint_num=300):
+def load_data(target, viewpoint_num=300, use_saved_selection=False):
     dirpath = "./data/{}".format(target)
     pickle_loc = "{}/Data".format(dirpath)
     output_loc = "{}/UnzipData".format(dirpath)
@@ -33,18 +33,25 @@ def load_data(target, viewpoint_num=300):
     # 获取文件列表
     files = os.listdir(pickle_loc)
 
-    # 如果viewpoint_num大于文件数量，则使用全部文件
-    if viewpoint_num > len(files):
-        viewpoint_num = len(files)
+    selected_files_path = os.path.join(dirpath, f"selected_files_{viewpoint_num}.txt")
+    selected_files = []
 
-    # 随机选择viewpoint_num个文件
-    selected_files = random.sample(files, viewpoint_num)
+    if use_saved_selection and os.path.exists(selected_files_path):
+        # 从文件中读取选中的文件名
+        with open(selected_files_path, 'r') as f:
+            selected_files = f.read().splitlines()
+    else:
+        # 如果viewpoint_num大于文件数量，则使用全部文件
+        if viewpoint_num > len(files):
+            viewpoint_num = len(files)
 
-    # 保存选中的文件名到一个文本文件
-    selected_files_path = os.path.join(dirpath, "selected_files.txt")
-    with open(selected_files_path, 'w') as f:
-        for file in selected_files:
-            f.write(f"{file}\n")
+        # 随机选择viewpoint_num个文件
+        selected_files = random.sample(files, viewpoint_num)
+
+        # 保存选中的文件名到一个文本文件
+        with open(selected_files_path, 'w') as f:
+            for file in selected_files:
+                f.write(f"{file}\n")
 
     # for pkls in os.listdir(pickle_loc):
     for pkls in selected_files:
