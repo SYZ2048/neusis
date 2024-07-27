@@ -10,9 +10,10 @@ import random
 def load_data(target, viewpoint_num=598, use_saved_selection=True):
     dirpath = "./data/{}".format(target)
     pickle_loc = "{}/Data".format(dirpath)
-    output_loc = "{}/UnzipData".format(dirpath)
+    # output_loc = "{}/UnzipData".format(dirpath)
     cfg_path = "{}/Config.json".format(dirpath)
 
+    # Read Config
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
 
@@ -25,13 +26,14 @@ def load_data(target, viewpoint_num=598, use_saved_selection=True):
         hfov = math.radians(hfov)
         vfov = math.radians(vfov)
 
-    if not os.path.exists(output_loc):
-        os.makedirs(output_loc)
+    # if not os.path.exists(output_loc):
+    #     os.makedirs(output_loc)
+
+    # Load data from Data/*.pkl
     images = []
     sensor_poses = []
 
-    # 获取文件列表
-    files = os.listdir(pickle_loc)
+    files = os.listdir(pickle_loc)  # 获取文件列表
 
     selected_files_path = os.path.join(dirpath, f"selected_files_{viewpoint_num}.txt")
     selected_files = []
@@ -53,14 +55,13 @@ def load_data(target, viewpoint_num=598, use_saved_selection=True):
             for file in selected_files:
                 f.write(f"{file}\n")
 
-    # for pkls in os.listdir(pickle_loc):
     for pkls in selected_files:
         filename = "{}/{}".format(pickle_loc, pkls)
         with open(filename, 'rb') as f:
             state = pickle.load(f)
             image = state["ImagingSonar"]
             s = image.shape
-            image[image < 0.2] = 0
+            image[image < 0.2] = 0          # threshold
             image[s[0] - 200:, :] = 0
             pose = state["PoseSensor"]
             images.append(image)

@@ -68,7 +68,7 @@ class Runner:
 
         self.data = load_data(dataset, self.viewpoint_num)
 
-        self.H, self.W = self.data[self.image_setkeyname][0].shape
+        self.H, self.W = self.data[self.image_setkeyname][0].shape # (512, 96)
 
         self.r_min = self.data["min_range"]
         self.r_max = self.data["max_range"]
@@ -87,7 +87,7 @@ class Runner:
         self.object_bbox_min = self.conf.get_list('mesh.object_bbox_min')
         self.object_bbox_max = self.conf.get_list('mesh.object_bbox_max')
 
-        r_increments = []
+        r_increments = []   # 等间距半径张量
         self.sonar_resolution = (self.r_max-self.r_min)/self.H
         for i in range(self.H):
             r_increments.append(i*self.sonar_resolution + self.r_min)
@@ -168,7 +168,12 @@ class Runner:
             self.load_checkpoint(latest_model_name)
     
     def getRandomImgCoordsByPercentage(self, target):
-        true_coords = []
+        '''
+        结合非0像素随机采样和全部像素纯随机采样
+        :param target: image
+        :return: coords 选取的像素的坐标点, target 图像image
+        '''
+        true_coords = []        # save coordinates (x,y) where its value > 0
         for y in np.arange(self.W):
             col = target[:, y]
             gt0 = col > 0
@@ -342,9 +347,9 @@ class Runner:
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
-    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
-    logging.getLogger('matplotlib.font_manager').disabled = True
-    logging.basicConfig(level=logging.DEBUG, format=FORMAT)
+    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"        # regulate log format
+    logging.getLogger('matplotlib.font_manager').disabled = True                # manage log
+    logging.basicConfig(level=logging.DEBUG, format=FORMAT)                     # log setting
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--conf', type=str, default="./confs/conf.conf")

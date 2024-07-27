@@ -24,7 +24,21 @@ def save_model(expID, model, i):
 
 def get_arcs(H, W, phi_min, phi_max, r_min, r_max, c2w, n_selected_px, arc_n_samples, ray_n_samples, 
             hfov, px, r_increments, randomize_points, device, cube_center):
-    
+    '''
+    :param phi_min / phi_max: 扫描的垂直角度
+    :param r_min / r_max: 扫描半径
+    :param c2w:
+    :param n_selected_px: number of sampled pixels (px)
+    :param arc_n_samples: number of samples along each arc
+    :param ray_n_samples: number of samples along each acoustic ray
+    :param hfov: ImagingSonar的水平方位角
+    :param px: sampled pixels (n_selected_px, 2)
+    :param r_increments:
+    :param randomize_points:
+    :param cube_center:
+    :return: dirs光线方向, dphi角度增量, r, rs, pts_r_rand, dists采样点在射线上的距离
+    '''
+
     i = px[:, 0]
     j = px[:, 1]
 

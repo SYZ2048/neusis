@@ -4,6 +4,16 @@ import sys
 
 class Network_S_Relu(torch.nn.Module):
     def __init__(self, D=8, H=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], no_rho=False):
+        """
+        D: 网络层数。
+        H: 每层的隐藏单元数。
+        input_ch: 输入数据的通道数。
+        input_ch_views: 视图输入数据的通道数。
+        output_ch: 输出的通道数。
+        skips: 需要跳跃连接的层索引列表。
+        no_rho: 是否不使用
+        rho（控制网络的输出方式）
+        """
         super(Network_S_Relu, self).__init__()
         self.input_ch = input_ch
         self.input_ch_views = input_ch_views
