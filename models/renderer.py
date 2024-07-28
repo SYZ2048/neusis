@@ -15,12 +15,12 @@ def extract_fields(bound_min, bound_max, resolution, query_func):
     Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
     Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(N)
 
-    u = np.zeros([resolution, resolution, resolution], dtype=np.float32)
+    u = np.zeros([resolution, resolution, resolution], dtype=np.float32)    # 存储每个坐标点的场值
     with torch.no_grad():
         for xi, xs in enumerate(X):
             for yi, ys in enumerate(Y):
                 for zi, zs in enumerate(Z):
-                    xx, yy, zz = torch.meshgrid(xs, ys, zs)
+                    xx, yy, zz = torch.meshgrid(xs, ys, zs) # 生成多维空间的网格坐标
                     pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)
                     val = query_func(pts).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy()
                     u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
@@ -29,6 +29,7 @@ def extract_fields(bound_min, bound_max, resolution, query_func):
 
 
 def extract_geometry(bound_min, bound_max, resolution, threshold, query_func):
+    # 使用marching_cubes提取几何体mesh
     u = extract_fields(bound_min, bound_max, resolution, query_func)
     vertices, triangles = mcubes.marching_cubes(u, threshold)
 
@@ -74,10 +75,12 @@ class NeuSRenderer:
                         ray_n_samples,
                         cos_anneal_ratio=0.0):
 
+        # reshape input
         dirs_reshaped  = dirs.reshape(n_pixels, arc_n_samples, ray_n_samples, 3)
         pts_reshaped = pts.reshape(n_pixels, arc_n_samples, ray_n_samples, 3)
         dists_reshaped = dists.reshape(n_pixels, arc_n_samples, ray_n_samples, 1)
 
+        # 计算中间点
         pts_mid = pts_reshaped + dirs_reshaped * dists_reshaped/2
 
         pts_mid = pts_mid.reshape(-1, 3)
@@ -90,7 +93,7 @@ class NeuSRenderer:
         gradients = sdf_network.gradient(pts_mid).squeeze()
 
 
-
+        # 计算采样颜色和偏差
         sampled_color = color_network(pts_mid, gradients, dirs, feature_vector).reshape(n_pixels, arc_n_samples, ray_n_samples)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)
@@ -98,6 +101,7 @@ class NeuSRenderer:
         inv_s = inv_s.expand(n_pixels*arc_n_samples*ray_n_samples, 1)
         true_cos = (dirs * gradients).sum(-1, keepdim=True)
 
+        # 余弦退火策略
         # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
         # the cos value "not dead" at the beginning training iterations, for better convergence.
         iter_cos = -(F.relu(-true_cos * 0.5 + 0.5) * (1.0 - cos_anneal_ratio) +
@@ -108,13 +112,14 @@ class NeuSRenderer:
         estimated_next_sdf = sdf + iter_cos * dists.reshape(-1, 1) * 0.5
         estimated_prev_sdf = sdf - iter_cos * dists.reshape(-1, 1) * 0.5
 
-
+        # 计算CDF（用于计算alpha和权重）
         prev_cdf = torch.sigmoid(estimated_prev_sdf * inv_s)
         next_cdf = torch.sigmoid(estimated_next_sdf * inv_s)
 
         p = prev_cdf - next_cdf
         c = prev_cdf
 
+        # 计算alpha和权重
         alpha = ((p + 1e-5) / (c + 1e-5)).reshape(n_pixels, arc_n_samples, ray_n_samples).clip(0.0, 1.0)
 
         cumuProdAllPointsOnEachRay = torch.cat([torch.ones([n_pixels, arc_n_samples, 1]), 1. - alpha + 1e-7], -1)

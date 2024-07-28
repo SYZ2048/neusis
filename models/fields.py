@@ -6,6 +6,7 @@ from models.embedder import get_embedder
 import sys
 
 # This implementation is borrowed from IDR: https://github.com/lioryariv/idr
+# 计算SDF和特征
 class SDFNetwork(nn.Module):
     def __init__(self,
                  d_in,
@@ -87,12 +88,15 @@ class SDFNetwork(nn.Module):
                 x = self.activation(x)
         return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1)
 
-    def sdf(self, x):
+    # 1
+    def sdf(self, x):   # 1
         return self.forward(x)[:, :1]
 
+    # 64
     def sdf_hidden_appearance(self, x):
         return self.forward(x)
 
+    # 3
     def gradient(self, x):
         x.requires_grad_(True)
         y = self.sdf(x)
@@ -107,6 +111,7 @@ class SDFNetwork(nn.Module):
         return gradients.unsqueeze(1)
 
 
+# 渲染
 # This implementation is borrowed from IDR: https://github.com/lioryariv/idr
 class RenderingNetwork(nn.Module):
     def __init__(self,
@@ -254,6 +259,7 @@ class NeRF(nn.Module):
             assert False
 
 
+# 把方差扩展到和输入数据长度保持一致
 class SingleVarianceNetwork(nn.Module):
     def __init__(self, init_val):
         super(SingleVarianceNetwork, self).__init__()
