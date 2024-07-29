@@ -76,6 +76,7 @@ class Runner:
         self.phi_max = self.data["vfov"]/2
         self.vfov = self.data["vfov"]
         self.hfov = self.data["hfov"]
+        self.reference_feature = self.data['reference_feature']
 
 
         self.cube_center = torch.Tensor([(self.x_max + self.x_min)/2, (self.y_max + self.y_min)/2, (self.z_max + self.z_min)/2])

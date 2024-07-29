@@ -5,6 +5,8 @@ import json
 import math
 from scipy.io import savemat
 import random
+from models.ImageEncoder import ImageEncoder
+import torch
 
 
 def load_data(target, viewpoint_num=598, use_saved_selection=True):
@@ -67,6 +69,15 @@ def load_data(target, viewpoint_num=598, use_saved_selection=True):
             images.append(image)
             sensor_poses.append(pose)
 
+    # Convert images to tensor and permute to match the encoder input shape
+    device = "cuda"
+    images_tensor = torch.tensor(images, device=device).unsqueeze(1)
+
+    # Initialize the encoder and extract features
+    encoder = ImageEncoder().to(device).eval()
+    with torch.no_grad():
+        reference_feature = encoder(images_tensor)
+
     data = {
         "images": images,
         "images_no_noise": [],
@@ -74,7 +85,8 @@ def load_data(target, viewpoint_num=598, use_saved_selection=True):
         "min_range": min_range,
         "max_range": max_range,
         "hfov": hfov,
-        "vfov": vfov
+        "vfov": vfov,
+        "reference_feature": reference_feature.cpu().numpy()
     }
 
     savemat('{}/{}.mat'.format(dirpath, target), data, oned_as='row')
