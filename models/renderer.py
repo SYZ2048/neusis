@@ -1,13 +1,8 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import logging
 import mcubes
-import sys, os
-import pickle 
-import matplotlib.pyplot as plt
-import time 
+
 
 def extract_fields(bound_min, bound_max, resolution, query_func):
     N = 64
@@ -73,7 +68,8 @@ class NeuSRenderer:
                         n_pixels,
                         arc_n_samples,
                         ray_n_samples,
-                        cos_anneal_ratio=0.0):
+                        image_features,     # image_features (n, 512, n_pixels, arc_n_samples * ray_n_samples)
+                        cos_anneal_ratio=0.0,):
 
         # reshape input
         dirs_reshaped  = dirs.reshape(n_pixels, arc_n_samples, ray_n_samples, 3)
@@ -83,18 +79,24 @@ class NeuSRenderer:
         # 计算中间点
         pts_mid = pts_reshaped + dirs_reshaped * dists_reshaped/2
 
-        pts_mid = pts_mid.reshape(-1, 3)
+        pts_mid = pts_mid.reshape(-1, 3)    # (n_pixels * arc_n_samples * ray_n_samples, 3)
 
-        sdf_nn_output = sdf_network(pts_mid)
+        # 确保特征和点的数量匹配
+        # print("pts_mid.size(0):", pts_mid.size(0))
+        # print("image_features.size(0):", image_features.size(0))
+        # assert pts_mid.size(0) == image_features.size(0), "Points and image features size mismatch"
+
+
+        sdf_nn_output = sdf_network(pts_mid, image_features)
         sdf = sdf_nn_output[:, :1]
 
         feature_vector = sdf_nn_output[:, 1:]
 
-        gradients = sdf_network.gradient(pts_mid).squeeze()
+        gradients = sdf_network.gradient(pts_mid, image_features).squeeze()
 
 
         # 计算采样颜色和偏差
-        sampled_color = color_network(pts_mid, gradients, dirs, feature_vector).reshape(n_pixels, arc_n_samples, ray_n_samples)
+        sampled_color = color_network(pts_mid, gradients, dirs, feature_vector, self.image_features).reshape(n_pixels, arc_n_samples, ray_n_samples)
 
         inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)
 
@@ -123,18 +125,18 @@ class NeuSRenderer:
         alpha = ((p + 1e-5) / (c + 1e-5)).reshape(n_pixels, arc_n_samples, ray_n_samples).clip(0.0, 1.0)
 
         cumuProdAllPointsOnEachRay = torch.cat([torch.ones([n_pixels, arc_n_samples, 1]), 1. - alpha + 1e-7], -1)
-    
+
         cumuProdAllPointsOnEachRay = torch.cumprod(cumuProdAllPointsOnEachRay, -1)
 
         TransmittancePointsOnArc = cumuProdAllPointsOnEachRay[:, :, ray_n_samples-2]
-        
+
         alphaPointsOnArc = alpha[:, :, ray_n_samples-1]
 
-        weights = alphaPointsOnArc * TransmittancePointsOnArc 
+        weights = alphaPointsOnArc * TransmittancePointsOnArc
 
         intensityPointsOnArc = sampled_color[:, :, ray_n_samples-1]
 
-        summedIntensities = (intensityPointsOnArc*weights).sum(dim=1) 
+        summedIntensities = (intensityPointsOnArc*weights).sum(dim=1)
 
         # Eikonal loss
         gradients = gradients.reshape(n_pixels, arc_n_samples, ray_n_samples, 3)
@@ -158,9 +160,9 @@ class NeuSRenderer:
         }
 
     def render_sonar(self, rays_d, pts, dists, n_pixels,
-                     arc_n_samples, ray_n_samples, cos_anneal_ratio=0.0):
+                     arc_n_samples, ray_n_samples, image_features, cos_anneal_ratio=0.0):
         # Render core
-        
+
         ret_fine = self.render_core_sonar(rays_d,
                                         pts,
                                         dists,
@@ -170,8 +172,9 @@ class NeuSRenderer:
                                         n_pixels,
                                         arc_n_samples,
                                         ray_n_samples,
+                                        image_features,
                                         cos_anneal_ratio=cos_anneal_ratio)
-        
+
         color_fine = ret_fine['color']
         weights = ret_fine['weights']
         weights_sum = weights.sum(dim=-1, keepdim=True)
@@ -189,7 +192,7 @@ class NeuSRenderer:
             'variation_error': ret_fine['variation_error']
         }
 
-    
+
 
     def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0):
         return extract_geometry(bound_min,

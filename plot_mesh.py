@@ -1,19 +1,6 @@
-import os, sys
-import numpy as np
-
-import time
 import torch
-import scipy.io
-import matplotlib.pyplot as plt
-from helpers import *
-from MLP import *
-
-import time
-
-from load_data import *
 from run_sdf import Runner
 import logging, argparse
-import scipy.io
 
    
 if __name__=='__main__':

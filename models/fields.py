@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from models.embedder import get_embedder
-import sys
+
 
 # This implementation is borrowed from IDR: https://github.com/lioryariv/idr
 # 计算SDF和特征
@@ -14,19 +14,23 @@ class SDFNetwork(nn.Module):
                  d_hidden,
                  n_layers,
                  skip_in=(4,),
-                 multires=0,
+                 multires=0,    # multries = 6
                  bias=0.5,
                  scale=1,
                  geometric_init=True,
                  weight_norm=True,
-                 inside_outside=False):
+                 inside_outside=False,
+                 feature_dim=128):
         super(SDFNetwork, self).__init__()
+        self.d_in = d_in
+        self.feature_dim = feature_dim
+        self.d_hidden = d_hidden
 
-        dims = [d_in] + [d_hidden for _ in range(n_layers)] + [d_out]
+        dims = [d_in + feature_dim] + [d_hidden for _ in range(n_layers)] + [d_out]
 
         self.embed_fn_fine = None
 
-        if multires > 0:
+        if multires > 0:    # 多分辨率编码器（get_embedder）对输入进行编码
             embed_fn, input_ch = get_embedder(multires, input_dims=d_in)
             self.embed_fn_fine = embed_fn
             dims[0] = input_ch
@@ -69,8 +73,30 @@ class SDFNetwork(nn.Module):
             setattr(self, "lin" + str(l), lin)
 
         self.activation = nn.Softplus(beta=100)
+        # MLP for combining features
+        self.mlp = nn.Sequential(
+            nn.Linear(d_in + feature_dim, d_hidden),
+            nn.ReLU()
+        )
 
-    def forward(self, inputs):
+    def forward(self, inputs, features):
+        """
+        :param inputs: pts_mid  (n_pixels * arc_n_samples * ray_n_samples, 3)
+        :param features: image_features (n, 512, n_pixels, arc_n_samples * ray_n_samples)
+        :return:
+        """
+        # 变换 image_features 使其与 pts_mid 对应
+        n, c, n_pixels, n_samples = features.shape
+        features = features.permute(0, 2, 3, 1).reshape(n, n_pixels*n_samples, c)  # (n, n_pixels* arc_n_samples * ray_n_samples, 512)
+        inputs = inputs.unsqueeze(0).expand(n, *inputs.shape)   # (n, n_pixels * arc_n_samples * ray_n_samples, 3)
+        combined_inputs = torch.cat([inputs, features],
+                                    dim=-1)  # (n, n_pixels * arc_n_samples * ray_n_samples, d_in + feature_dim)
+
+        combined_inputs = combined_inputs.reshape(-1, self.d_in + self.feature_dim) # (n * n_pixels * arc_n_samples * ray_n_samples, d_in + feature_dim)
+        combined_inputs = self.mlp(combined_inputs) # (n * n_pixels * arc_n_samples * ray_n_samples, d_hidden-64)
+        combined_inputs = combined_inputs.reshape(n, -1, self.d_hidden) # (n, n_pixels * arc_n_samples * ray_n_samples, d_hidden-64)
+        inputs = combined_inputs    # (n, n_pixels * arc_n_samples * ray_n_samples, d_hidden)
+
         inputs = inputs * self.scale
         if self.embed_fn_fine is not None:
             inputs = self.embed_fn_fine(inputs)
@@ -86,20 +112,24 @@ class SDFNetwork(nn.Module):
 
             if l < self.num_layers - 2:
                 x = self.activation(x)
+
+        # get average sdf and feature
+        x = x.mean(dim=0)
+
         return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1)
 
     # 1
-    def sdf(self, x):   # 1
-        return self.forward(x)[:, :1]
+    def sdf(self, x, features):   # 1
+        return self.forward(x, features)[:, :1]
 
     # 64
-    def sdf_hidden_appearance(self, x):
-        return self.forward(x)
+    def sdf_hidden_appearance(self, x, features):
+        return self.forward(x, features)
 
     # 3
-    def gradient(self, x):
+    def gradient(self, x, features):
         x.requires_grad_(True)
-        y = self.sdf(x)
+        y = self.sdf(x, features)
         d_output = torch.ones_like(y, requires_grad=False, device=y.device)
         gradients = torch.autograd.grad(
             outputs=y,
@@ -123,12 +153,14 @@ class RenderingNetwork(nn.Module):
                  n_layers,
                  weight_norm=True,
                  multires_view=0,
-                 squeeze_out=True):
+                 squeeze_out=True,
+                 feature_dim=64):
         super().__init__()
 
+        self.feature_dim = feature_dim
         self.mode = mode
         self.squeeze_out = squeeze_out
-        dims = [d_in + d_feature] + [d_hidden for _ in range(n_layers)] + [d_out]
+        dims = [d_in + d_feature + feature_dim] + [d_hidden for _ in range(n_layers)] + [d_out]
 
         self.embedview_fn = None
         if multires_view > 0:
@@ -149,18 +181,18 @@ class RenderingNetwork(nn.Module):
 
         self.relu = nn.ReLU()
 
-    def forward(self, points, normals, view_dirs, feature_vectors):
+    def forward(self, points, normals, view_dirs, feature_vectors, image_features):
         if self.embedview_fn is not None:
             view_dirs = self.embedview_fn(view_dirs)
 
         rendering_input = None
 
         if self.mode == 'idr':
-            rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, view_dirs, normals, feature_vectors, image_features], dim=-1)
         elif self.mode == 'no_view_dir':
-            rendering_input = torch.cat([points, normals, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, normals, feature_vectors, image_features], dim=-1)
         elif self.mode == 'no_normal':
-            rendering_input = torch.cat([points, view_dirs, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, view_dirs, feature_vectors, image_features], dim=-1)
 
         x = rendering_input
 

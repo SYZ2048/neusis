@@ -1,7 +1,6 @@
 import torch
 import matplotlib
 matplotlib.use('Agg')
-from MLP import *
 
 
 torch.autograd.set_detect_anomaly(True)
@@ -32,11 +31,16 @@ def get_arcs(H, W, phi_min, phi_max, r_min, r_max, c2w, n_selected_px, arc_n_sam
     :param arc_n_samples: number of samples along each arc
     :param ray_n_samples: number of samples along each acoustic ray
     :param hfov: ImagingSonar的水平方位角
-    :param px: sampled pixels (n_selected_px, 2)
+    :param px: 选取的2D图像坐标点sampled pixels (n_selected_px, 2)
     :param r_increments:
     :param randomize_points:
     :param cube_center:
-    :return: dirs光线方向, dphi角度增量, r, rs, pts_r_rand, dists采样点在射线上的距离
+    :return:    dirs    每个选择的像素点生成一系列光线射线方向(n_selected_px * arc_n_samples * ray_n_samples, 3)
+                dphi    角度增量，标量 0.024434609527920613
+                r       每个选择像素的半径，(n_selected_px,)
+                rs      每个选择像素在每个弧上的最远半径值，(n_selected_px, arc_n_samples)
+                pts_r_rand  每个选择像素点的随机采样点的坐标，(n_selected_px * arc_n_samples * ray_n_samples, 3)
+                dists   每个选择像素点在每个弧上的采样点之间的距离，(n_selected_px * arc_n_samples, ray_n_samples)
     '''
 
     i = px[:, 0]

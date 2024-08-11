@@ -1,23 +1,18 @@
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from tqdm import tqdm, trange
 from helpers import *
-from MLP import *
-#from PIL import Image
-import random
 from pyhocon import ConfigFactory
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, NeRF
 from models.renderer import NeuSRenderer
 import trimesh
 from load_data import *
 import logging
-import argparse 
+import argparse
 
 
 class Runner:
-    def __init__(self, conf, is_continue=False, write_config=True, viewpoint_num=300):
+    def __init__(self, conf, viewpoint_num, is_continue=False, write_config=True):
         conf_path = conf
         f = open(conf_path)
         conf_text = f.read()
@@ -27,17 +22,17 @@ class Runner:
         self.viewpoint_num = viewpoint_num
 
     def set_params(self):
-        self.expID = self.conf.get_string('conf.expID') 
+        self.expID = self.conf.get_string('conf.expID')
 
         dataset = self.conf.get_string('conf.dataset')
-        self.image_setkeyname =  self.conf.get_string('conf.image_setkeyname') 
+        self.image_setkeyname = self.conf.get_string('conf.image_setkeyname')
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dataset = dataset
 
         # Training parameters
         self.end_iter = self.conf.get_int('train.end_iter')
-        self.N_rand = self.conf.get_int('train.num_select_pixels') #H*W 
+        self.N_rand = self.conf.get_int('train.num_select_pixels')  # H*W
         self.arc_n_samples = self.conf.get_int('train.arc_n_samples')
         self.save_freq = self.conf.get_int('train.save_freq')
         self.report_freq = self.conf.get_int('train.report_freq')
@@ -57,7 +52,7 @@ class Runner:
         self.base_exp_dir = './experiments/{}'.format(self.expID)
         self.randomize_points = self.conf.get_float('train.randomize_points')
         self.select_px_method = self.conf.get_string('train.select_px_method')
-        self.select_valid_px = self.conf.get_bool('train.select_valid_px')        
+        self.select_valid_px = self.conf.get_bool('train.select_valid_px')
         self.x_max = self.conf.get_float('mesh.x_max')
         self.x_min = self.conf.get_float('mesh.x_min')
         self.y_max = self.conf.get_float('mesh.y_max')
@@ -68,30 +63,37 @@ class Runner:
 
         self.data = load_data(dataset, self.viewpoint_num)
 
-        self.H, self.W = self.data[self.image_setkeyname][0].shape # (512, 96)
+        self.H, self.W = self.data[self.image_setkeyname][0].shape  # (512, 96)
 
         self.r_min = self.data["min_range"]
         self.r_max = self.data["max_range"]
-        self.phi_min = -self.data["vfov"]/2
-        self.phi_max = self.data["vfov"]/2
+        self.phi_min = -self.data["vfov"] / 2
+        self.phi_max = self.data["vfov"] / 2
         self.vfov = self.data["vfov"]
         self.hfov = self.data["hfov"]
-        self.reference_feature = self.data['reference_feature']
+        self.images_reference_feature = SonarReferenceDataset(self.data['images_reference_feature'],
+                                                              self.data['sensor_poses'], self.phi_min, self.phi_max,
+                                                              self.r_min, self.r_max, self.H, self.W)
 
+        # 初始化特征的维度
+        # feature_dim = self.images_reference_feature.size(1)
+        # self.conf['model']['sdf_network']['feature_dim'] = feature_dim
+        # self.conf['model']['rendering_network']['feature_dim'] = feature_dim
 
-        self.cube_center = torch.Tensor([(self.x_max + self.x_min)/2, (self.y_max + self.y_min)/2, (self.z_max + self.z_min)/2])
+        self.cube_center = torch.Tensor(
+            [(self.x_max + self.x_min) / 2, (self.y_max + self.y_min) / 2, (self.z_max + self.z_min) / 2])
 
         self.timef = self.conf.get_bool('conf.timef')
         self.end_iter = self.conf.get_int('train.end_iter')
         self.start_iter = self.conf.get_int('train.start_iter')
-         
+
         self.object_bbox_min = self.conf.get_list('mesh.object_bbox_min')
         self.object_bbox_max = self.conf.get_list('mesh.object_bbox_max')
 
-        r_increments = []   # 等间距半径张量
-        self.sonar_resolution = (self.r_max-self.r_min)/self.H
+        r_increments = []  # 等间距半径张量
+        self.sonar_resolution = (self.r_max - self.r_min) / self.H
         for i in range(self.H):
-            r_increments.append(i*self.sonar_resolution + self.r_min)
+            r_increments.append(i * self.sonar_resolution + self.r_min)
 
         self.r_increments = torch.FloatTensor(r_increments).to(self.device)
 
@@ -109,16 +111,15 @@ class Runner:
 
         if self.write_config:
             with open('./experiments/{}/config.json'.format(self.expID), 'w') as f:
-                json.dump(self.conf.__dict__, f, indent = 2)
+                json.dump(self.conf.__dict__, f, indent=2)
 
         # Create all image tensors beforehand to speed up process
-
         self.i_train = np.arange(len(self.data[self.image_setkeyname]))
 
         self.coords_all_ls = [(x, y) for x in np.arange(self.H) for y in np.arange(self.W)]
         self.coords_all_set = set(self.coords_all_ls)
 
-        #self.coords_all = torch.from_numpy(np.array(self.coords_all_ls)).to(self.device)
+        # self.coords_all = torch.from_numpy(np.array(self.coords_all_ls)).to(self.device)
 
         self.del_coords = []
         for y in np.arange(self.W):
@@ -129,7 +130,7 @@ class Runner:
         self.coords_all = torch.LongTensor(self.coords_all).to(self.device)
 
         self.criterion = torch.nn.L1Loss(reduction='sum')
-        
+
         self.model_list = []
         self.writer = None
 
@@ -145,21 +146,20 @@ class Runner:
 
         self.optimizer = torch.optim.Adam(params_to_train, lr=self.learning_rate)
 
-
         self.iter_step = 0
         self.renderer = NeuSRenderer(self.sdf_network,
-                                    self.deviation_network,
-                                    self.color_network,
-                                    self.base_exp_dir,
-                                    self.expID,
-                                    **self.conf['model.neus_renderer'])  
+                                     self.deviation_network,
+                                     self.color_network,
+                                     self.base_exp_dir,
+                                     self.expID,
+                                     **self.conf['model.neus_renderer'])
 
         latest_model_name = None
         if self.is_continue:
             model_list_raw = os.listdir(os.path.join(self.base_exp_dir, 'checkpoints'))
             model_list = []
             for model_name in model_list_raw:
-                if model_name[-3:] == 'pth': #and int(model_name[5:-4]) <= self.end_iter:
+                if model_name[-3:] == 'pth':  # and int(model_name[5:-4]) <= self.end_iter:
                     model_list.append(model_name)
             model_list.sort()
             latest_model_name = model_list[-1]
@@ -167,14 +167,14 @@ class Runner:
         if latest_model_name is not None:
             logging.info('Find checkpoint: {}'.format(latest_model_name))
             self.load_checkpoint(latest_model_name)
-    
+
     def getRandomImgCoordsByPercentage(self, target):
         '''
         结合非0像素随机采样和全部像素纯随机采样
         :param target: image
         :return: coords 选取的像素的坐标点, target 图像image
         '''
-        true_coords = []        # save coordinates (x,y) where its value > 0
+        true_coords = []  # save coordinates (x,y) where its value > 0
         for y in np.arange(self.W):
             col = target[:, y]
             gt0 = col > 0
@@ -182,116 +182,125 @@ class Runner:
             if len(indTrue) > 0:
                 true_coords.extend([(x, y) for x in indTrue])
 
-        sampling_perc = int(self.percent_select_true*len(true_coords))
+        sampling_perc = int(self.percent_select_true * len(true_coords))
         true_coords = random.sample(true_coords, sampling_perc)
         true_coords = list(set(true_coords) - set(self.del_coords))
         true_coords = torch.LongTensor(true_coords).to(self.device)
         target = torch.Tensor(target).to(self.device)
-        if self.iter_step%len(self.data[self.image_setkeyname]) !=0:
+        if self.iter_step % len(self.data[self.image_setkeyname]) != 0:
             N_rand = 0
         else:
             N_rand = self.N_rand
         N_rand = self.N_rand
         coords = select_coordinates(self.coords_all, target, N_rand, self.select_valid_px)
-        
+
         coords = torch.cat((coords, true_coords), dim=0)
-            
+
         return coords, target
 
     def train(self):
         loss_arr = []
 
         for i in trange(self.start_iter, self.end_iter, len(self.data[self.image_setkeyname])):
-            i_train = np.arange(len(self.data[self.image_setkeyname]))
+            i_train = np.arange(len(self.data[self.image_setkeyname]))  # 随机打乱的训练集的索引
             np.random.shuffle(i_train)
             loss_total = 0
             sum_intensity_loss = 0
             sum_eikonal_loss = 0
             sum_total_variational = 0
-            
+
             for j in trange(0, len(i_train)):
                 img_i = i_train[j]
-                target = self.data[self.image_setkeyname][img_i]
+                target = self.data[self.image_setkeyname][img_i]  # 当前的数据图像
 
-                
-                pose = self.data["sensor_poses"][img_i]  
-                
+                pose = self.data["sensor_poses"][img_i]  # 获取当前图像的传感器位姿
+
+                # 根据选择的方法从当前图像中随机采样像素
                 if self.select_px_method == "byprob":
                     coords, target = self.getRandomImgCoordsByProbability(target)
                 else:
                     coords, target = self.getRandomImgCoordsByPercentage(target)
 
-                n_pixels = len(coords)
-                rays_d, dphi, r, rs, pts, dists = get_arcs(self.H, self.W, self.phi_min, self.phi_max, self.r_min, self.r_max,  torch.Tensor(pose), n_pixels,
-                                                        self.arc_n_samples, self.ray_n_samples, self.hfov, coords, self.r_increments, 
-                                                        self.randomize_points, self.device, self.cube_center)
+                n_pixels = len(coords)  # Not a constant num
 
-                
+                rays_d, dphi, r, rs, pts, dists = get_arcs(self.H, self.W, self.phi_min, self.phi_max, self.r_min,
+                                                           self.r_max, torch.Tensor(pose), n_pixels,
+                                                           self.arc_n_samples, self.ray_n_samples, self.hfov, coords,
+                                                           self.r_increments,
+                                                           self.randomize_points, self.device, self.cube_center)
+
                 target_s = target[coords[:, 0], coords[:, 1]]
 
-                render_out = self.renderer.render_sonar(rays_d, pts, dists, n_pixels, 
+                print("n_pixels:", n_pixels)
+                self.feature_projection = self.images_reference_feature.feature_matching(pts, n_pixels)
+                print("feature_projection.shape:", self.feature_projection.shape)   # (n, 512, n_selected_px, arc_n_samples * ray_n_samples)
+
+                render_out = self.renderer.render_sonar(rays_d, pts, dists, n_pixels,
                                                         self.arc_n_samples, self.ray_n_samples,
+                                                        self.feature_projection,
                                                         cos_anneal_ratio=self.get_cos_anneal_ratio())
-                
 
                 intensityPointsOnArc = render_out["intensityPointsOnArc"]
 
-                gradient_error = render_out['gradient_error'] #.reshape(n_pixels, self.arc_n_samples, -1)
+                gradient_error = render_out['gradient_error']  # .reshape(n_pixels, self.arc_n_samples, -1)
 
-                eikonal_loss = gradient_error.sum()*(1/(self.arc_n_samples*self.ray_n_samples*n_pixels))
+                eikonal_loss = gradient_error.sum() * (1 / (self.arc_n_samples * self.ray_n_samples * n_pixels))
 
-                variation_regularization = render_out['variation_error']*(1/(self.arc_n_samples*self.ray_n_samples*n_pixels))
+                variation_regularization = render_out['variation_error'] * (
+                        1 / (self.arc_n_samples * self.ray_n_samples * n_pixels))
 
                 if self.r_div:
-                    intensity_fine = (torch.divide(intensityPointsOnArc, rs)*render_out["weights"]).sum(dim=1) 
+                    intensity_fine = (torch.divide(intensityPointsOnArc, rs) * render_out["weights"]).sum(dim=1)
                 else:
                     intensity_fine = render_out['color_fine']
 
-                intensity_error = self.criterion(intensity_fine, target_s)*(1/n_pixels)
-                    
-            
-                loss = intensity_error + eikonal_loss * self.igr_weight  + variation_regularization*self.variation_reg_weight
+                intensity_error = self.criterion(intensity_fine, target_s) * (1 / n_pixels)
+
+                loss = intensity_error + eikonal_loss * self.igr_weight + variation_regularization * self.variation_reg_weight
 
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
                 with torch.no_grad():
-                    lossNG = intensity_error + eikonal_loss * self.igr_weight 
+                    lossNG = intensity_error + eikonal_loss * self.igr_weight
                     loss_total += lossNG.cpu().numpy().item()
                     sum_intensity_loss += intensity_error.cpu().numpy().item()
                     sum_eikonal_loss += eikonal_loss.cpu().numpy().item()
-                    sum_total_variational +=  variation_regularization.cpu().numpy().item()
-                
+                    sum_total_variational += variation_regularization.cpu().numpy().item()
+
+                torch.cuda.empty_cache()
+
                 self.iter_step += 1
                 self.update_learning_rate()
 
-                del(target)
-                del(target_s)
-                del(rays_d)
-                del(pts)
-                del(dists)
-                del(render_out)
-                del(coords)
-                
+                del (target)
+                del (target_s)
+                del (rays_d)
+                del (pts)
+                del (dists)
+                del (render_out)
+                del (coords)
+
             with torch.no_grad():
-                l = loss_total/len(i_train)
-                iL =  sum_intensity_loss/len(i_train)
-                eikL =  sum_eikonal_loss/len(i_train)
-                varL =  sum_total_variational/len(i_train)
+                l = loss_total / len(i_train)
+                iL = sum_intensity_loss / len(i_train)
+                eikL = sum_eikonal_loss / len(i_train)
+                varL = sum_total_variational / len(i_train)
                 loss_arr.append(l)
 
-            if i ==0 or i % self.save_freq == 0:
-                logging.info('iter:{} ********************* SAVING CHECKPOINT ****************'.format(self.optimizer.param_groups[0]['lr']))
+            if i == 0 or i % self.save_freq == 0:
+                logging.info('iter:{} ********************* SAVING CHECKPOINT ****************'.format(
+                    self.optimizer.param_groups[0]['lr']))
                 self.save_checkpoint()
 
             if i % self.report_freq == 0:
-                print('iter:{:8>d} "Loss={} | intensity Loss={} " | eikonal loss={} | total variation loss = {} | lr={}'.format(self.iter_step, l, iL, eikL, varL, self.optimizer.param_groups[0]['lr']))
+                print(
+                    'iter:{:8>d} "Loss={} | intensity Loss={} " | eikonal loss={} | total variation loss = {} | lr={}'.format(
+                        self.iter_step, l, iL, eikL, varL, self.optimizer.param_groups[0]['lr']))
 
             if i == 0 or i % self.val_mesh_freq == 0:
-                self.validate_mesh(threshold = self.level_set)
-            
-
+                self.validate_mesh(threshold=self.level_set)
 
     def save_checkpoint(self):
         checkpoint = {
@@ -303,10 +312,12 @@ class Runner:
         }
 
         os.makedirs(os.path.join(self.base_exp_dir, 'checkpoints'), exist_ok=True)
-        torch.save(checkpoint, os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>6d}.pth'.format(self.iter_step)))
+        torch.save(checkpoint,
+                   os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>6d}.pth'.format(self.iter_step)))
 
     def load_checkpoint(self, checkpoint_name):
-        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device)
+        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name),
+                                map_location=self.device)
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
         self.color_network.load_state_dict(checkpoint['color_network_fine'])
@@ -334,7 +345,7 @@ class Runner:
         bound_min = torch.tensor(self.object_bbox_min, dtype=torch.float32)
         bound_max = torch.tensor(self.object_bbox_max, dtype=torch.float32)
 
-        vertices, triangles =\
+        vertices, triangles = \
             self.renderer.extract_geometry(bound_min, bound_max, resolution=resolution, threshold=threshold)
 
         os.makedirs(os.path.join(self.base_exp_dir, 'meshes'), exist_ok=True)
@@ -346,21 +357,22 @@ class Runner:
         mesh.export(os.path.join(self.base_exp_dir, 'meshes', '{:0>8d}.ply'.format(self.iter_step)))
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
-    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"        # regulate log format
-    logging.getLogger('matplotlib.font_manager').disabled = True                # manage log
-    logging.basicConfig(level=logging.DEBUG, format=FORMAT)                     # log setting
-    
+    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"  # regulate log format
+    logging.getLogger('matplotlib.font_manager').disabled = True  # manage log
+    logging.basicConfig(level=logging.DEBUG, format=FORMAT)  # log setting
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--conf', type=str, default="./confs/conf.conf")
+    parser.add_argument('--viewpoint_num', type=int, default=98)
     parser.add_argument('--is_continue', default=False, action="store_true")
     parser.add_argument('--gpu', type=int, default=0)
-    parser.add_argument('--viewpoint_num', type=int, default=300)
+
 
     args = parser.parse_args()
 
     torch.cuda.set_device(args.gpu)
-    runner = Runner(args.conf, args.is_continue, args.viewpoint_num)
+    runner = Runner(args.conf, args.viewpoint_num, args.is_continue)
     runner.set_params()
     runner.train()
